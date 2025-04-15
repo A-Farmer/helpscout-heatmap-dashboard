@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Papa from 'papaparse';
 import _ from 'lodash';
 import TeamMemberView from './TeamMemberView';
+import UserWeeklyView from './UserWeeklyView';
 
 // File Upload Component
 const FileUpload = ({ onFileLoaded }) => {
@@ -64,7 +65,7 @@ const HelpscoutHeatmap = () => {
   const [maxDate, setMaxDate] = useState('');
   const [weeks, setWeeks] = useState([]);
   const [selectedWeek, setSelectedWeek] = useState('');
-  const [viewMode, setViewMode] = useState('hourly'); // 'hourly' or 'team'
+  const [viewMode, setViewMode] = useState('hourly'); // 'hourly', 'team', or 'user'
 
   // Color scale for heatmap (from light to dark blue)
   const getColor = (value, max) => {
@@ -237,6 +238,11 @@ const HelpscoutHeatmap = () => {
   // Handle email selection change
   const handleEmailChange = (e) => {
     setSelectedEmail(e.target.value);
+    // If switching to user view, ensure a specific email is selected
+    if (viewMode === 'user' && e.target.value === 'all') {
+      // If selecting 'all' in user view, switch back to hourly view
+      setViewMode('hourly');
+    }
   };
 
   // Handle week selection change
@@ -246,6 +252,11 @@ const HelpscoutHeatmap = () => {
 
   // Handle view mode change
   const handleViewModeChange = (mode) => {
+    // If switching to user view, ensure a specific email is selected
+    if (mode === 'user' && selectedEmail === 'all') {
+      alert('Please select a specific team member to view their weekly pattern.');
+      return;
+    }
     setViewMode(mode);
   };
 
@@ -298,7 +309,7 @@ const HelpscoutHeatmap = () => {
                 onChange={handleEmailChange}
                 disabled={viewMode === 'team'}
               >
-                <option value="all">All Team Members</option>
+                <option value="all" disabled={viewMode === 'user'}>All Team Members</option>
                 {uniqueEmails.map((email, index) => (
                   <option key={index} value={email}>
                     {email.split('@')[0]}
@@ -318,7 +329,7 @@ const HelpscoutHeatmap = () => {
                   }`}
                   onClick={() => handleViewModeChange('hourly')}
                 >
-                  Hourly View
+                  Hourly
                 </button>
                 <button
                   className={`flex-1 py-2 px-4 focus:outline-none ${
@@ -328,31 +339,43 @@ const HelpscoutHeatmap = () => {
                   }`}
                   onClick={() => handleViewModeChange('team')}
                 >
-                  Team View
+                  Team
+                </button>
+                <button
+                  className={`flex-1 py-2 px-4 focus:outline-none ${
+                    viewMode === 'user'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white text-gray-700 hover:bg-gray-50'
+                  }`}
+                  onClick={() => handleViewModeChange('user')}
+                >
+                  User Week
                 </button>
               </div>
             </div>
           </div>
           
-          {/* Day tabs */}
-          <div className="mb-4 border-b border-gray-200">
-            <ul className="flex flex-wrap -mb-px">
-              {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => (
-                <li key={day} className="mr-2">
-                  <button
-                    className={`inline-block p-4 ${
-                      selectedDay === day
-                        ? 'text-blue-600 border-b-2 border-blue-600 rounded-t-lg active'
-                        : 'border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300'
-                    }`}
-                    onClick={() => setSelectedDay(day)}
-                  >
-                    {day}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
+          {/* Day tabs - Only show for hourly and team views */}
+          {viewMode !== 'user' && (
+            <div className="mb-4 border-b border-gray-200">
+              <ul className="flex flex-wrap -mb-px">
+                {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day) => (
+                  <li key={day} className="mr-2">
+                    <button
+                      className={`inline-block p-4 ${
+                        selectedDay === day
+                          ? 'text-blue-600 border-b-2 border-blue-600 rounded-t-lg active'
+                          : 'border-b-2 border-transparent rounded-t-lg hover:text-gray-600 hover:border-gray-300'
+                      }`}
+                      onClick={() => setSelectedDay(day)}
+                    >
+                      {day}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           
           {/* Heatmap Legend */}
           <div className="flex items-center mb-4">
@@ -373,7 +396,7 @@ const HelpscoutHeatmap = () => {
           </div>
           
           {/* View Content */}
-          {viewMode === 'hourly' ? (
+          {viewMode === 'hourly' && (
             // Hourly View
             <div className="overflow-x-auto">
               <table className="min-w-full bg-white">
@@ -412,12 +435,23 @@ const HelpscoutHeatmap = () => {
                 </tbody>
               </table>
             </div>
-          ) : (
+          )}
+          
+          {viewMode === 'team' && (
             // Team Member View
             <TeamMemberView 
               heatmapData={heatmapData} 
               uniqueEmails={uniqueEmails} 
               selectedDay={selectedDay}
+              getColor={getColor}
+            />
+          )}
+          
+          {viewMode === 'user' && (
+            // User Weekly View
+            <UserWeeklyView 
+              heatmapData={heatmapData}
+              selectedEmail={selectedEmail}
               getColor={getColor}
             />
           )}
