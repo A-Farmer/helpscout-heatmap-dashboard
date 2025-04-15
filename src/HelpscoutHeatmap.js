@@ -4,39 +4,69 @@ import _ from 'lodash';
 import TeamMemberView from './TeamMemberView';
 import UserWeeklyView from './UserWeeklyView';
 
-// File Upload Component
-const FileUpload = ({ onFileLoaded }) => {
+// Multi-File Upload Component
+const FileUpload = ({ onFilesLoaded }) => {
   const [isLoading, setIsLoading] = useState(false);
+  const [uploadedFiles, setUploadedFiles] = useState([]);
 
   const handleFileChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
       setIsLoading(true);
-      const reader = new FileReader();
+      setUploadedFiles(prev => [...prev, ...files.map(file => ({ name: file.name, status: 'pending' }))]);
       
-      reader.onload = (event) => {
-        const csvData = event.target.result;
-        onFileLoaded(csvData);
-        setIsLoading(false);
-      };
+      const filePromises = files.map(file => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          
+          reader.onload = (event) => {
+            resolve({
+              name: file.name,
+              content: event.target.result
+            });
+          };
+          
+          reader.onerror = () => {
+            reject(new Error(`Error reading file: ${file.name}`));
+          };
+          
+          reader.readAsText(file);
+        });
+      });
       
-      reader.onerror = () => {
-        console.error('Error reading file');
-        setIsLoading(false);
-      };
-      
-      reader.readAsText(file);
+      Promise.all(filePromises)
+        .then(results => {
+          // Update the file status to 'loaded'
+          setUploadedFiles(prev => prev.map(file => {
+            if (results.some(r => r.name === file.name)) {
+              return { ...file, status: 'loaded' };
+            }
+            return file;
+          }));
+          
+          onFilesLoaded(results);
+          setIsLoading(false);
+        })
+        .catch(error => {
+          console.error('Error reading files:', error);
+          setIsLoading(false);
+        });
     }
+  };
+
+  const handleRemoveFile = (fileName) => {
+    setUploadedFiles(prev => prev.filter(file => file.name !== fileName));
   };
 
   return (
     <div className="file-upload mb-4">
       <label className="block text-sm font-medium text-gray-700 mb-2">
-        Upload Helpscout CSV File:
+        Upload Helpscout CSV Files:
       </label>
       <input
         type="file"
         accept=".csv"
+        multiple
         onChange={handleFileChange}
         className="block w-full text-sm text-gray-500
           file:mr-4 file:py-2 file:px-4
@@ -45,7 +75,30 @@ const FileUpload = ({ onFileLoaded }) => {
           file:bg-blue-50 file:text-blue-700
           hover:file:bg-blue-100"
       />
-      {isLoading && <p className="mt-2 text-sm text-gray-500">Loading file...</p>}
+      {isLoading && <p className="mt-2 text-sm text-gray-500">Loading files...</p>}
+      
+      {/* Display uploaded files */}
+      {uploadedFiles.length > 0 && (
+        <div className="mt-4">
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Uploaded Files:</h3>
+          <ul className="bg-gray-50 rounded-md p-2">
+            {uploadedFiles.map((file, index) => (
+              <li key={index} className="flex justify-between items-center py-1">
+                <div className="flex items-center">
+                  <span className={`w-2 h-2 rounded-full mr-2 ${file.status === 'loaded' ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                  <span className="text-sm">{file.name}</span>
+                </div>
+                <button 
+                  onClick={() => handleRemoveFile(file.name)} 
+                  className="text-xs text-red-500 hover:text-red-700"
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 };
@@ -66,6 +119,7 @@ const HelpscoutHeatmap = () => {
   const [weeks, setWeeks] = useState([]);
   const [selectedWeek, setSelectedWeek] = useState('');
   const [viewMode, setViewMode] = useState('hourly'); // 'hourly', 'team', or 'user'
+  const [uploadedFilesInfo, setUploadedFilesInfo] = useState([]);
 
   // Color scale for heatmap (from light to dark blue)
   const getColor = (value, max) => {
@@ -74,54 +128,218 @@ const HelpscoutHeatmap = () => {
     return `rgba(33, 150, 243, 0.${intensity})`;
   };
 
-  // Handle file upload
-  const handleFileLoaded = (csvData) => {
+  // Process a single file
+  const processFile = (csvData, fileName) => {
+    return new Promise((resolve, reject) => {
+      Papa.parse(csvData, {
+        header: true,
+        dynamicTyping: true,
+        skipEmptyLines: true,
+        delimitersToGuess: [',', '\t', '|', ';'],
+        complete: (results) => {
+          // Check if required columns exist
+          const hasCreatedAt = results.meta.fields.includes('created_at_est');
+          const hasUserEmail = results.meta.fields.includes('user_email');
+          
+          if (!hasCreatedAt || !hasUserEmail) {
+            reject(new Error(`${fileName} must contain created_at_est and user_email columns`));
+            return;
+          }
+          
+          // Filter to only include rows with user_email (support team responses)
+          const supportResponses = results.data.filter(row => row.user_email !== null);
+          
+          // Process the data
+          const processedData = supportResponses.map(row => {
+            const dateTime = new Date(row.created_at_est);
+            return {
+              email: row.user_email,
+              date: dateTime.toISOString().split('T')[0], // YYYY-MM-DD
+              dayOfWeek: dateTime.getDay(), // 0-6 (Sunday-Saturday)
+              dayName: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dateTime.getDay()],
+              hour: dateTime.getHours(),
+              timestamp: dateTime.getTime(),
+              // Add source file for tracking
+              sourceFile: fileName
+            };
+          });
+          
+          resolve({
+            data: processedData,
+            count: processedData.length,
+            fileName: fileName
+          });
+        },
+        error: (error) => {
+          reject(new Error(`Error parsing CSV ${fileName}: ${error}`));
+        }
+      });
+    });
+  };
+
+  // Handle multiple file uploads
+  const handleFilesLoaded = (files) => {
     setLoading(true);
     
-    Papa.parse(csvData, {
-      header: true,
-      dynamicTyping: true,
-      skipEmptyLines: true,
-      delimitersToGuess: [',', '\t', '|', ';'],
-      complete: (results) => {
-        // Check if required columns exist
-        const hasCreatedAt = results.meta.fields.includes('created_at_est');
-        const hasUserEmail = results.meta.fields.includes('user_email');
+    const processPromises = files.map(file => processFile(file.content, file.name));
+    
+    Promise.all(processPromises)
+      .then(results => {
+        // Merge all processed data
+        const allData = results.flatMap(result => result.data);
         
-        if (!hasCreatedAt || !hasUserEmail) {
-          alert('CSV file must contain created_at_est and user_email columns');
-          setLoading(false);
-          return;
-        }
+        // Track file info for display
+        const fileInfo = results.map(result => ({
+          name: result.fileName,
+          count: result.count
+        }));
         
-        // Filter to only include rows with user_email (support team responses)
-        const supportResponses = results.data.filter(row => row.user_email !== null);
-        
-        // Process the data
-        const processedData = supportResponses.map(row => {
-          const dateTime = new Date(row.created_at_est);
-          return {
-            email: row.user_email,
-            date: dateTime.toISOString().split('T')[0], // YYYY-MM-DD
-            dayOfWeek: dateTime.getDay(), // 0-6 (Sunday-Saturday)
-            dayName: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dateTime.getDay()],
-            hour: dateTime.getHours(),
-            timestamp: dateTime.getTime()
-          };
+        // Update uploaded files list
+        setUploadedFilesInfo(prev => {
+          // Filter out existing files with the same name
+          const newPrev = prev.filter(p => !fileInfo.some(f => f.name === p.name));
+          return [...newPrev, ...fileInfo];
         });
         
-        // Get unique emails and dates
-        const emails = Array.from(new Set(processedData.map(row => row.email))).filter(email => email);
-        const dates = processedData.map(row => row.date);
-        const min = dates.length > 0 ? dates.reduce((a, b) => a < b ? a : b) : '';
-        const max = dates.length > 0 ? dates.reduce((a, b) => a > b ? a : b) : '';
+        // Merge with existing data if any
+        setData(prev => {
+          // Remove data from files that are being re-uploaded
+          const fileNames = files.map(f => f.name);
+          const filteredPrev = prev.filter(row => !fileNames.includes(row.sourceFile));
+          return [...filteredPrev, ...allData];
+        });
         
-        // Group dates by week for selection dropdown
+        // Get unique emails from all data
+        const allEmails = Array.from(new Set(allData.map(row => row.email))).filter(email => email);
+        
+        setUniqueEmails(prev => {
+          const uniqueSet = new Set([...prev, ...allEmails]);
+          return Array.from(uniqueSet);
+        });
+        
+        // Update data loaded flag
+        setDataLoaded(true);
+        
+        // Update available dates, min/max date, and week ranges
+        updateDateRanges();
+        
+        setLoading(false);
+      })
+      .catch(error => {
+        console.error('Error processing files:', error);
+        alert(error.message);
+        setLoading(false);
+      });
+  };
+
+  // Update date ranges based on all loaded data
+  const updateDateRanges = () => {
+    // Calculate this based on merged data
+    const dates = data.map(row => row.date);
+    
+    if (dates.length === 0) {
+      setAvailableDates([]);
+      setDateRange({ start: '', end: '' });
+      setMinDate('');
+      setMaxDate('');
+      setWeeks([]);
+      setSelectedWeek('');
+      return;
+    }
+    
+    const min = dates.reduce((a, b) => a < b ? a : b);
+    const max = dates.reduce((a, b) => a > b ? a : b);
+    
+    // Group dates by week for selection dropdown
+    const weekGroups = _.groupBy(
+      _.uniq(dates).sort(), 
+      date => {
+        const d = new Date(date);
+        // Get the Sunday of the week
+        const day = d.getDay();
+        const diff = d.getDate() - day;
+        const sunday = new Date(d.setDate(diff));
+        return sunday.toISOString().split('T')[0];
+      }
+    );
+    
+    const weekOptions = Object.keys(weekGroups).map(weekStart => {
+      const lastDay = weekGroups[weekStart][weekGroups[weekStart].length - 1];
+      return {
+        value: `${weekStart}|${lastDay}`,
+        label: `${weekStart} to ${lastDay}`
+      };
+    });
+    
+    // Set state with new date ranges
+    setAvailableDates([...new Set(dates)].sort());
+    setDateRange({ start: min, end: max });
+    setMinDate(min);
+    setMaxDate(max);
+    setWeeks(weekOptions);
+    setSelectedWeek(weekOptions.length > 0 ? weekOptions[weekOptions.length - 1].value : '');
+    
+    // Initial filter with all data
+    filterData(data, [...uniqueEmails, ...Array.from(new Set(data.map(row => row.email))).filter(email => email)], { start: min, end: max }, 'all');
+  };
+
+  // Clear all loaded data
+  const handleClearAllData = () => {
+    if (window.confirm('Are you sure you want to clear all loaded data?')) {
+      setData([]);
+      setHeatmapData({});
+      setUniqueEmails([]);
+      setDateRange({ start: '', end: '' });
+      setAvailableDates([]);
+      setMinDate('');
+      setMaxDate('');
+      setWeeks([]);
+      setSelectedWeek('');
+      setUploadedFilesInfo([]);
+      setDataLoaded(false);
+    }
+  };
+
+  // Remove a specific uploaded file
+  const handleRemoveFile = (fileName) => {
+    if (window.confirm(`Are you sure you want to remove ${fileName}?`)) {
+      // Filter out the data from this file
+      const newData = data.filter(item => item.sourceFile !== fileName);
+      setData(newData);
+      
+      // Update uploaded files info
+      setUploadedFilesInfo(prev => prev.filter(file => file.name !== fileName));
+      
+      if (newData.length === 0) {
+        // If no data left, reset everything
+        setDataLoaded(false);
+        setHeatmapData({});
+        setUniqueEmails([]);
+        setDateRange({ start: '', end: '' });
+        setAvailableDates([]);
+        setMinDate('');
+        setMaxDate('');
+        setWeeks([]);
+        setSelectedWeek('');
+      } else {
+        // Recalculate unique emails, date ranges, etc.
+        const emails = Array.from(new Set(newData.map(row => row.email))).filter(email => email);
+        setUniqueEmails(emails);
+        
+        // Update date ranges with the remaining data
+        const dates = newData.map(row => row.date);
+        const min = dates.reduce((a, b) => a < b ? a : b);
+        const max = dates.reduce((a, b) => a > b ? a : b);
+        
+        setDateRange({ start: min, end: max });
+        setMinDate(min);
+        setMaxDate(max);
+        
+        // Regroup dates by week
         const weekGroups = _.groupBy(
           _.uniq(dates).sort(), 
           date => {
             const d = new Date(date);
-            // Get the Sunday of the week
             const day = d.getDay();
             const diff = d.getDate() - day;
             const sunday = new Date(d.setDate(diff));
@@ -137,26 +355,14 @@ const HelpscoutHeatmap = () => {
           };
         });
         
-        // Set state
-        setData(processedData);
-        setUniqueEmails(emails);
-        setDateRange({ start: min, end: max });
         setAvailableDates([...new Set(dates)].sort());
-        setMinDate(min);
-        setMaxDate(max);
         setWeeks(weekOptions);
         setSelectedWeek(weekOptions.length > 0 ? weekOptions[weekOptions.length - 1].value : '');
-        setDataLoaded(true);
-
-        // Initial filter
-        filterData(processedData, emails, { start: min, end: max }, 'all');
-        setLoading(false);
-      },
-      error: (error) => {
-        console.error('Error parsing CSV:', error);
-        setLoading(false);
+        
+        // Refilter the data
+        filterData(newData, emails, { start: min, end: max }, selectedEmail);
       }
-    });
+    }
   };
 
   // Handle week selection
@@ -271,25 +477,78 @@ const HelpscoutHeatmap = () => {
     <div className="p-4 bg-white rounded-lg shadow-md">
       <h1 className="text-2xl font-bold mb-4">Support Team Response Heatmap</h1>
       
-      {!dataLoaded ? (
-        <div className="mb-6">
-          <p className="mb-4">
-            Upload a CSV file with support team responses data. The file must include:
-          </p>
-          <ul className="list-disc ml-6 mb-4">
-            <li><strong>created_at_est</strong> - Timestamp of when the response was sent (format: YYYY-MM-DDTHH:MM:SS)</li>
-            <li><strong>user_email</strong> - Email of the support representative who sent the response</li>
-          </ul>
-          <FileUpload onFileLoaded={handleFileLoaded} />
+      {/* File Upload Section - Always visible */}
+      <div className="mb-6">
+        <div className="flex justify-between items-center mb-2">
+          <h2 className="text-lg font-medium">Data Source</h2>
+          {uploadedFilesInfo.length > 0 && (
+            <button 
+              onClick={handleClearAllData} 
+              className="text-xs text-red-500 hover:text-red-700 p-1 border border-red-300 rounded"
+            >
+              Clear All Data
+            </button>
+          )}
         </div>
-      ) : (
+        
+        <p className="mb-4">
+          Upload one or more CSV files with support team responses data. Each file must include:
+        </p>
+        <ul className="list-disc ml-6 mb-4">
+          <li><strong>created_at_est</strong> - Timestamp of when the response was sent (format: YYYY-MM-DDTHH:MM:SS)</li>
+          <li><strong>user_email</strong> - Email of the support representative who sent the response</li>
+        </ul>
+        
+        <FileUpload onFilesLoaded={handleFilesLoaded} />
+        
+        {/* Display uploaded files information */}
+        {uploadedFilesInfo.length > 0 && (
+          <div className="mt-4 p-3 bg-gray-50 rounded-md">
+            <h3 className="text-sm font-medium mb-2">Uploaded Data Sources:</h3>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="p-2 text-left">File Name</th>
+                    <th className="p-2 text-right">Responses</th>
+                    <th className="p-2 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {uploadedFilesInfo.map((file, index) => (
+                    <tr key={index} className="border-t border-gray-200">
+                      <td className="p-2">{file.name}</td>
+                      <td className="p-2 text-right">{file.count.toLocaleString()}</td>
+                      <td className="p-2 text-right">
+                        <button 
+                          onClick={() => handleRemoveFile(file.name)} 
+                          className="text-xs text-red-500 hover:text-red-700"
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="border-t border-gray-200 font-medium">
+                    <td className="p-2">Total</td>
+                    <td className="p-2 text-right">{uploadedFilesInfo.reduce((sum, file) => sum + file.count, 0).toLocaleString()}</td>
+                    <td className="p-2"></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+      
+      {dataLoaded && (
         <>
           {/* Filters */}
           <div className="mb-6 grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Week Range:</label>
               <select
-                className="filter-dropdown"
+                className="w-full p-2 border border-gray-300 rounded-md"
                 value={selectedWeek}
                 onChange={handleWeekChange}
               >
@@ -304,7 +563,7 @@ const HelpscoutHeatmap = () => {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Support Rep:</label>
               <select
-                className="filter-dropdown"
+                className="w-full p-2 border border-gray-300 rounded-md"
                 value={selectedEmail}
                 onChange={handleEmailChange}
                 disabled={viewMode === 'team'}
@@ -320,21 +579,33 @@ const HelpscoutHeatmap = () => {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">View Mode:</label>
-              <div className="view-mode-container">
+              <div className="flex border border-gray-300 rounded-md overflow-hidden">
                 <button
-                  className={`view-mode-button ${viewMode === 'hourly' ? 'active' : ''}`}
+                  className={`flex-1 py-2 px-4 focus:outline-none ${
+                    viewMode === 'hourly'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white text-gray-700 hover:bg-gray-50'
+                  }`}
                   onClick={() => handleViewModeChange('hourly')}
                 >
                   Hourly
                 </button>
                 <button
-                  className={`view-mode-button ${viewMode === 'team' ? 'active' : ''}`}
+                  className={`flex-1 py-2 px-4 focus:outline-none ${
+                    viewMode === 'team'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white text-gray-700 hover:bg-gray-50'
+                  }`}
                   onClick={() => handleViewModeChange('team')}
                 >
                   Team
                 </button>
                 <button
-                  className={`view-mode-button ${viewMode === 'user' ? 'active' : ''}`}
+                  className={`flex-1 py-2 px-4 focus:outline-none ${
+                    viewMode === 'user'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-white text-gray-700 hover:bg-gray-50'
+                  }`}
                   onClick={() => handleViewModeChange('user')}
                 >
                   User Week
@@ -458,19 +729,9 @@ const HelpscoutHeatmap = () => {
               </div>
               <div>
                 <p className="text-sm text-gray-500">Total Responses</p>
-                <p className="font-medium">{data.length}</p>
+                <p className="font-medium">{data.length.toLocaleString()}</p>
               </div>
             </div>
-          </div>
-          
-          {/* Upload new file button */}
-          <div className="mt-4">
-            <button 
-              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              onClick={() => setDataLoaded(false)}
-            >
-              Upload Different File
-            </button>
           </div>
         </>
       )}
