@@ -289,7 +289,7 @@ const HelpscoutHeatmap = () => {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Week Range:</label>
               <select
-                className="w-full p-2 border border-gray-300 rounded-md"
+                className="filter-dropdown"
                 value={selectedWeek}
                 onChange={handleWeekChange}
               >
@@ -304,7 +304,7 @@ const HelpscoutHeatmap = () => {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Support Rep:</label>
               <select
-                className="w-full p-2 border border-gray-300 rounded-md"
+                className="filter-dropdown"
                 value={selectedEmail}
                 onChange={handleEmailChange}
                 disabled={viewMode === 'team'}
@@ -320,33 +320,21 @@ const HelpscoutHeatmap = () => {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">View Mode:</label>
-              <div className="flex border border-gray-300 rounded-md overflow-hidden">
+              <div className="view-mode-container">
                 <button
-                  className={`flex-1 py-2 px-4 focus:outline-none ${
-                    viewMode === 'hourly'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white text-gray-700 hover:bg-gray-50'
-                  }`}
+                  className={`view-mode-button ${viewMode === 'hourly' ? 'active' : ''}`}
                   onClick={() => handleViewModeChange('hourly')}
                 >
                   Hourly
                 </button>
                 <button
-                  className={`flex-1 py-2 px-4 focus:outline-none ${
-                    viewMode === 'team'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white text-gray-700 hover:bg-gray-50'
-                  }`}
+                  className={`view-mode-button ${viewMode === 'team' ? 'active' : ''}`}
                   onClick={() => handleViewModeChange('team')}
                 >
                   Team
                 </button>
                 <button
-                  className={`flex-1 py-2 px-4 focus:outline-none ${
-                    viewMode === 'user'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-white text-gray-700 hover:bg-gray-50'
-                  }`}
+                  className={`view-mode-button ${viewMode === 'user' ? 'active' : ''}`}
                   onClick={() => handleViewModeChange('user')}
                 >
                   User Week
